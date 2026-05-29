@@ -1,0 +1,14 @@
+{
+    "name": "parcelx-mis-automation",
+    "version": "1.0.0",
+    "description": "Automates ParcelX MIS download and Google Sheets upload",
+    "main": "src/index.js",
+    "scripts": {
+          "start": "node src/index.js"
+    },
+    "dependencies": {
+          "playwright": "^1.44.0",
+          "googleapis": "^140.0.0",
+          "dotenv": "^16.4.5"
+    }
+}
