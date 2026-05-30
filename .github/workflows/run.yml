@@ -1,0 +1,46 @@
+name: ParcelX MIS Automation
+
+on:
+  # Runs every day at 9:00 AM IST (3:30 AM UTC)
+  schedule:
+    - cron: '30 3 * * *'
+
+  # Also allows manual trigger from GitHub Actions tab
+  workflow_dispatch:
+
+jobs:
+  run-mis-automation:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Install Playwright browsers
+        run: npx playwright install chromium --with-deps
+
+      - name: Run MIS Automation
+        env:
+          PARCELX_BASIC_USER: ${{ secrets.PARCELX_BASIC_USER }}
+          PARCELX_BASIC_PASS: ${{ secrets.PARCELX_BASIC_PASS }}
+          PARCELX_FORM_USER:  ${{ secrets.PARCELX_FORM_USER }}
+          PARCELX_FORM_PASS:  ${{ secrets.PARCELX_FORM_PASS }}
+        run: node src/index.js
+
+      - name: Upload MIS file as artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mis-report-${{ github.run_id }}
+          path: downloads/*.csv
+          retention-days: 7
