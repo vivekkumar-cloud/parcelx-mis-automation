@@ -1,0 +1,34 @@
+name: ParcelX Live Count
+
+on:
+  schedule:
+    - cron: '*/5 * * * *'  # Every 5 minutes (GitHub minimum)
+  workflow_dispatch:
+
+jobs:
+  get-live-count:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Install Playwright
+        run: npx playwright install chromium --with-deps
+
+      - name: Get Live Count
+        env:
+          PARCELX_BASIC_USER: ${{ secrets.PARCELX_BASIC_USER }}
+          PARCELX_BASIC_PASS: ${{ secrets.PARCELX_BASIC_PASS }}
+          PARCELX_FORM_USER:  ${{ secrets.PARCELX_FORM_USER }}
+          PARCELX_FORM_PASS:  ${{ secrets.PARCELX_FORM_PASS }}
+        run: node src/liveCount.js
