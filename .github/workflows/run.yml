@@ -7,13 +7,11 @@ on:
     - cron: '30 6 * * *'   # 12:00 PM IST
     - cron: '30 8 * * *'   #  2:00 PM IST
     - cron: '30 10 * * *'  #  4:00 PM IST
-    - cron: '0 11 * * *'   #  4:30 PM IST  ← skipped, keeping 5PM below
     - cron: '30 11 * * *'  #  5:00 PM IST
     - cron: '30 13 * * *'  #  7:00 PM IST
     - cron: '30 16 * * *'  # 10:00 PM IST
     - cron: '30 17 * * *'  # 11:00 PM IST
 
-  # Manual trigger from Actions tab anytime
   workflow_dispatch:
 
 jobs:
@@ -29,7 +27,6 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '20'
-          cache: 'npm'
 
       - name: Install dependencies
         run: npm install
