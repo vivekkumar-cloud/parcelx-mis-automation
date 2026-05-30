@@ -8,7 +8,6 @@
   },
   "dependencies": {
     "playwright": "^1.44.0",
-    "googleapis": "^140.0.0",
     "csv-parse": "^5.5.5",
     "dotenv": "^16.4.5"
   }
