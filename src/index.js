@@ -85,11 +85,9 @@ async function downloadMIS(page, context) {
   }, today);
   await sleep(500);
 
-  // Click Search
   log('Clicking Search...');
   await page.click('#searchbtn');
 
-  // Wait for the yellow loader button to appear (search started)
   log('Waiting for search to start...');
   try {
     await page.waitForFunction(() => {
@@ -101,25 +99,20 @@ async function downloadMIS(page, context) {
     log('Loader not detected, continuing...');
   }
 
-  // Wait for yellow loader to disappear (search done)
   log('Waiting for search to complete...');
   await page.waitForFunction(() => {
     const loader = document.querySelector('#searchbtn_loader');
     return !loader || loader.style.display === 'none';
   }, { timeout: 120000 });
-
-  // Extra buffer for table to fully render
   await sleep(5000);
   log('Results loaded ✅');
 
-  // Click Export and wait for download
   log('Clicking Export...');
   const [download] = await Promise.all([
     context.waitForEvent('download', { timeout: 120000 }),
     page.click('#btn_exportexcel'),
   ]);
 
-  // Wait for export loader to finish
   log('Waiting for file to generate...');
   try {
     await page.waitForFunction(() => {
@@ -134,40 +127,43 @@ async function downloadMIS(page, context) {
   return savePath;
 }
 
-// ─── STEP 3: POST TO APPS SCRIPT ──────────────────────────────────────────────
-function postToAppsScript(url, data) {
+// ─── STEP 3: POST TO APPS SCRIPT (fixed redirect + chunking) ──────────────────
+function postChunkToAppsScript(url, data) {
   return new Promise((resolve, reject) => {
     const body = JSON.stringify(data);
 
-    const makeRequest = (requestUrl) => {
+    const makeRequest = (requestUrl, isRedirect = false) => {
       const u = new URL(requestUrl);
+      const method = isRedirect ? 'GET' : 'POST';
       const options = {
         hostname: u.hostname,
         path: u.pathname + u.search,
-        method: 'POST',
-        headers: {
+        method,
+        headers: isRedirect ? {} : {
           'Content-Type': 'application/json',
           'Content-Length': Buffer.byteLength(body),
         },
       };
 
       const req = https.request(options, (res) => {
-        if ([301, 302, 303, 307, 308].includes(res.statusCode) && res.headers.location) {
-          log(`Redirecting → ${res.headers.location.substring(0, 70)}...`);
+        // On redirect: follow as GET (script already ran on POST)
+        if ([301, 302, 303].includes(res.statusCode) && res.headers.location) {
+          log(`  ↪ Redirect → fetching response...`);
           res.resume();
-          makeRequest(res.headers.location);
+          makeRequest(res.headers.location, true);
           return;
         }
+
         let responseData = '';
         res.on('data', chunk => responseData += chunk);
         res.on('end', () => {
           try { resolve(JSON.parse(responseData)); }
-          catch { resolve({ raw: responseData }); }
+          catch { resolve({ raw: responseData.substring(0, 200) }); }
         });
       });
 
       req.on('error', reject);
-      req.write(body);
+      if (!isRedirect) req.write(body);
       req.end();
     };
 
@@ -175,7 +171,7 @@ function postToAppsScript(url, data) {
   });
 }
 
-// ─── STEP 3: UPLOAD TO GOOGLE SHEETS ──────────────────────────────────────────
+// ─── STEP 3: UPLOAD IN CHUNKS OF 1000 ROWS ────────────────────────────────────
 async function uploadToGoogleSheets(csvFilePath) {
   log('Parsing CSV...');
   const rawCsv = fs.readFileSync(csvFilePath, 'utf8');
@@ -185,14 +181,31 @@ async function uploadToGoogleSheets(csvFilePath) {
     bom: true,
   });
 
-  log(`Uploading ${records.length} rows → Google Sheets via Apps Script...`);
-  const result = await postToAppsScript(CONFIG.appsScript.url, { rows: records });
+  const CHUNK_SIZE = 1000;
+  const totalChunks = Math.ceil(records.length / CHUNK_SIZE);
+  log(`Uploading ${records.length} rows in ${totalChunks} chunks of ${CHUNK_SIZE}...`);
 
-  if (result.status === 'success') {
-    log(`✅ Uploaded ${result.rows} rows to "Daily Dump" successfully!`);
-  } else {
-    throw new Error(`Apps Script error: ${result.message || JSON.stringify(result)}`);
+  for (let i = 0; i < records.length; i += CHUNK_SIZE) {
+    const chunkIndex = Math.floor(i / CHUNK_SIZE);
+    const chunk = records.slice(i, i + CHUNK_SIZE);
+
+    log(`Sending chunk ${chunkIndex + 1}/${totalChunks} (${chunk.length} rows)...`);
+    const result = await postChunkToAppsScript(CONFIG.appsScript.url, {
+      rows: chunk,
+      chunk: chunkIndex,
+      totalChunks,
+    });
+
+    if (result.status !== 'success') {
+      throw new Error(`Chunk ${chunkIndex + 1} failed: ${result.message || JSON.stringify(result)}`);
+    }
+    log(`  Chunk ${chunkIndex + 1} uploaded ✅`);
+
+    // Small pause between chunks to avoid rate limits
+    if (i + CHUNK_SIZE < records.length) await sleep(1500);
   }
+
+  log(`✅ All ${records.length} rows uploaded to "Daily Dump"!`);
 }
 
 // ─── MAIN ─────────────────────────────────────────────────────────────────────
