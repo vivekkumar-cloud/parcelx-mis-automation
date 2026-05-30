@@ -63,7 +63,7 @@ async function downloadMIS(page, context) {
 
   log('Expanding Non Mandatory Fields...');
   await page.evaluate(() => document.querySelector('h4.dropdown_mis_el')?.click());
-  await sleep(1500);
+  await sleep(2000);
 
   log('Checking Select All...');
   const selectAll = await page.$('#selectAll');
@@ -85,21 +85,48 @@ async function downloadMIS(page, context) {
   }, today);
   await sleep(500);
 
+  // Click Search
   log('Clicking Search...');
-  await page.evaluate(() => document.querySelector('#searchbtn')?.click());
+  await page.click('#searchbtn');
 
-  log('Waiting for results to load...');
+  // Wait for the yellow loader button to appear (search started)
+  log('Waiting for search to start...');
+  try {
+    await page.waitForFunction(() => {
+      const loader = document.querySelector('#searchbtn_loader');
+      return loader && loader.style.display !== 'none';
+    }, { timeout: 8000 });
+    log('Search in progress...');
+  } catch (e) {
+    log('Loader not detected, continuing...');
+  }
+
+  // Wait for yellow loader to disappear (search done)
+  log('Waiting for search to complete...');
   await page.waitForFunction(() => {
-    const loader = document.querySelector('#loader');
+    const loader = document.querySelector('#searchbtn_loader');
     return !loader || loader.style.display === 'none';
-  }, { timeout: 90000 });
-  await sleep(3000);
+  }, { timeout: 120000 });
 
+  // Extra buffer for table to fully render
+  await sleep(5000);
+  log('Results loaded ✅');
+
+  // Click Export and wait for download
   log('Clicking Export...');
   const [download] = await Promise.all([
-    context.waitForEvent('download', { timeout: 90000 }),
-    page.evaluate(() => document.querySelector('#btn_exportexcel')?.click())
+    context.waitForEvent('download', { timeout: 120000 }),
+    page.click('#btn_exportexcel'),
   ]);
+
+  // Wait for export loader to finish
+  log('Waiting for file to generate...');
+  try {
+    await page.waitForFunction(() => {
+      const expLoader = document.querySelector('#btn_exportexcel_loader');
+      return !expLoader || expLoader.style.display === 'none';
+    }, { timeout: 60000 });
+  } catch(e) { /* ignore */ }
 
   const savePath = path.join(DOWNLOAD_DIR, download.suggestedFilename() || `mis_${Date.now()}.csv`);
   await download.saveAs(savePath);
@@ -107,7 +134,7 @@ async function downloadMIS(page, context) {
   return savePath;
 }
 
-// ─── STEP 3: POST TO APPS SCRIPT (handles redirects manually) ─────────────────
+// ─── STEP 3: POST TO APPS SCRIPT ──────────────────────────────────────────────
 function postToAppsScript(url, data) {
   return new Promise((resolve, reject) => {
     const body = JSON.stringify(data);
@@ -125,14 +152,12 @@ function postToAppsScript(url, data) {
       };
 
       const req = https.request(options, (res) => {
-        // Follow redirects while preserving POST + body
         if ([301, 302, 303, 307, 308].includes(res.statusCode) && res.headers.location) {
           log(`Redirecting → ${res.headers.location.substring(0, 70)}...`);
-          res.resume(); // discard response body
+          res.resume();
           makeRequest(res.headers.location);
           return;
         }
-
         let responseData = '';
         res.on('data', chunk => responseData += chunk);
         res.on('end', () => {
