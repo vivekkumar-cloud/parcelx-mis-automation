@@ -1,8 +1,8 @@
 const { chromium } = require('playwright');
-const { google } = require('googleapis');
 const path = require('path');
 const fs = require('fs');
-const csv = require('csv-parse/sync');
+const https = require('https');
+const { parse } = require('csv-parse/sync');
 require('dotenv').config();
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────
@@ -13,10 +13,8 @@ const CONFIG = {
     formUser:  process.env.PARCELX_FORM_USER,
     formPass:  process.env.PARCELX_FORM_PASS,
   },
-  google: {
-    sheetId:       '1yRYizP8nTBNaVco_WOBw9nFu0MknKdFZxTmucDLIDnM',
-    sheetName:     'Daily Dump',
-    credentialsFile: process.env.GOOGLE_CREDENTIALS_FILE || './credentials.json',
+  appsScript: {
+    url: 'https://script.google.com/macros/s/AKfycbx5srAWp28mP8d6LvCoo_3osOedKVjAOddeWq-ML7x0V4NvRAdOwOhGUrwqplGn4Njd/exec',
   },
 };
 
@@ -63,51 +61,41 @@ async function downloadMIS(page, context) {
   });
   await sleep(2000);
 
-  // Expand Non Mandatory Fields
   log('Expanding Non Mandatory Fields...');
-  await page.evaluate(() => {
-    const el = document.querySelector('h4.dropdown_mis_el');
-    if (el) el.click();
-  });
+  await page.evaluate(() => document.querySelector('h4.dropdown_mis_el')?.click());
   await sleep(1500);
 
-  // Check Select All
   log('Checking Select All...');
   const selectAll = await page.$('#selectAll');
   if (selectAll && !(await selectAll.isChecked())) await selectAll.click();
   await sleep(500);
 
-  // Check NDR checkbox
   log('Checking NDR checkbox...');
   const ndrBox = await page.$('#box8');
   if (ndrBox && !(await ndrBox.isChecked())) await ndrBox.click();
   await sleep(500);
 
-  // Set today's date
   const today = getToday();
   log(`Setting date: ${today}`);
   await page.evaluate((date) => {
-    const fromDate = document.querySelector('#from_date');
-    const toDate   = document.querySelector('#to_date');
-    if (fromDate) { fromDate.value = date; fromDate.dispatchEvent(new Event('change')); }
-    if (toDate)   { toDate.value   = date; toDate.dispatchEvent(new Event('change')); }
+    const from = document.querySelector('#from_date');
+    const to   = document.querySelector('#to_date');
+    if (from) { from.value = date; from.dispatchEvent(new Event('change')); }
+    if (to)   { to.value   = date; to.dispatchEvent(new Event('change')); }
   }, today);
   await sleep(500);
 
-  // Click Search
   log('Clicking Search...');
   await page.evaluate(() => document.querySelector('#searchbtn')?.click());
 
-  // Wait for data to load
-  log('Waiting for results...');
+  log('Waiting for results to load...');
   await page.waitForFunction(() => {
     const loader = document.querySelector('#loader');
     return !loader || loader.style.display === 'none';
   }, { timeout: 90000 });
   await sleep(3000);
 
-  // Click Export and capture download
-  log('Exporting CSV...');
+  log('Clicking Export...');
   const [download] = await Promise.all([
     context.waitForEvent('download', { timeout: 90000 }),
     page.evaluate(() => document.querySelector('#btn_exportexcel')?.click())
@@ -119,45 +107,67 @@ async function downloadMIS(page, context) {
   return savePath;
 }
 
+// ─── STEP 3: POST TO APPS SCRIPT (handles redirects manually) ─────────────────
+function postToAppsScript(url, data) {
+  return new Promise((resolve, reject) => {
+    const body = JSON.stringify(data);
+
+    const makeRequest = (requestUrl) => {
+      const u = new URL(requestUrl);
+      const options = {
+        hostname: u.hostname,
+        path: u.pathname + u.search,
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Content-Length': Buffer.byteLength(body),
+        },
+      };
+
+      const req = https.request(options, (res) => {
+        // Follow redirects while preserving POST + body
+        if ([301, 302, 303, 307, 308].includes(res.statusCode) && res.headers.location) {
+          log(`Redirecting → ${res.headers.location.substring(0, 70)}...`);
+          res.resume(); // discard response body
+          makeRequest(res.headers.location);
+          return;
+        }
+
+        let responseData = '';
+        res.on('data', chunk => responseData += chunk);
+        res.on('end', () => {
+          try { resolve(JSON.parse(responseData)); }
+          catch { resolve({ raw: responseData }); }
+        });
+      });
+
+      req.on('error', reject);
+      req.write(body);
+      req.end();
+    };
+
+    makeRequest(url);
+  });
+}
+
 // ─── STEP 3: UPLOAD TO GOOGLE SHEETS ──────────────────────────────────────────
 async function uploadToGoogleSheets(csvFilePath) {
-  log('Uploading to Google Sheets...');
-
-  // Auth with service account
-  const credentials = JSON.parse(fs.readFileSync(CONFIG.google.credentialsFile, 'utf8'));
-  const auth = new google.auth.GoogleAuth({
-    credentials,
-    scopes: ['https://www.googleapis.com/auth/spreadsheets'],
-  });
-  const sheets = google.sheets({ version: 'v4', auth });
-
-  // Parse CSV
+  log('Parsing CSV...');
   const rawCsv = fs.readFileSync(csvFilePath, 'utf8');
-  const records = csv.parse(rawCsv, {
+  const records = parse(rawCsv, {
     columns: false,
     skip_empty_lines: true,
     bom: true,
   });
 
-  log(`Parsed ${records.length} rows (including header)`);
+  log(`Uploading ${records.length} rows → Google Sheets via Apps Script...`);
+  const result = await postToAppsScript(CONFIG.appsScript.url, { rows: records });
 
-  // Clear existing data in "Daily Dump"
-  log(`Clearing sheet "${CONFIG.google.sheetName}"...`);
-  await sheets.spreadsheets.values.clear({
-    spreadsheetId: CONFIG.google.sheetId,
-    range: `'${CONFIG.google.sheetName}'`,
-  });
-
-  // Upload all data
-  log(`Writing ${records.length} rows to Google Sheets...`);
-  await sheets.spreadsheets.values.update({
-    spreadsheetId: CONFIG.google.sheetId,
-    range: `'${CONFIG.google.sheetName}'!A1`,
-    valueInputOption: 'USER_ENTERED',
-    requestBody: { values: records },
-  });
-
-  log(`✅ Uploaded ${records.length} rows to "${CONFIG.google.sheetName}"`);
+  if (result.status === 'success') {
+    log(`✅ Uploaded ${result.rows} rows to "Daily Dump" successfully!`);
+  } else {
+    throw new Error(`Apps Script error: ${result.message || JSON.stringify(result)}`);
+  }
 }
 
 // ─── MAIN ─────────────────────────────────────────────────────────────────────
