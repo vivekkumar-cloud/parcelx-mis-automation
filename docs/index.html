@@ -1,0 +1,211 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>B2C Live Counter</title>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Orbitron:wght@900&display=swap');
+
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      background: #cc0000;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      align-items: center;
+      font-family: 'Share Tech Mono', monospace;
+      overflow: hidden;
+    }
+
+    /* Scanline effect */
+    body::after {
+      content: '';
+      position: fixed;
+      inset: 0;
+      background: repeating-linear-gradient(
+        0deg,
+        transparent,
+        transparent 2px,
+        rgba(0,0,0,0.05) 2px,
+        rgba(0,0,0,0.05) 4px
+      );
+      pointer-events: none;
+      z-index: 10;
+    }
+
+    .label {
+      font-family: 'Share Tech Mono', monospace;
+      font-size: 13px;
+      font-weight: 400;
+      color: rgba(0, 0, 0, 0.65);
+      letter-spacing: 4px;
+      text-transform: uppercase;
+      margin-bottom: 24px;
+    }
+
+    .counter-wrap {
+      position: relative;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .counter {
+      font-family: 'Orbitron', monospace;
+      font-size: clamp(80px, 18vw, 180px);
+      font-weight: 900;
+      color: #000;
+      letter-spacing: 8px;
+      line-height: 1;
+      text-shadow:
+        0 0 20px rgba(0,0,0,0.4),
+        0 4px 8px rgba(0,0,0,0.3);
+      transition: transform 0.1s;
+    }
+
+    .counter.bump { transform: scale(1.02); }
+
+    .pulse-ring {
+      position: absolute;
+      width: 12px;
+      height: 12px;
+      background: #000;
+      border-radius: 50%;
+      top: -6px;
+      right: -20px;
+      animation: pulse 2s infinite;
+    }
+
+    @keyframes pulse {
+      0%,100% { opacity: 1; transform: scale(1); }
+      50%      { opacity: 0.3; transform: scale(0.6); }
+    }
+
+    .meta {
+      margin-top: 32px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .last-update {
+      font-size: 11px;
+      color: rgba(0,0,0,0.55);
+      letter-spacing: 2px;
+    }
+
+    .refresh-bar {
+      width: 200px;
+      height: 3px;
+      background: rgba(0,0,0,0.2);
+      border-radius: 2px;
+      overflow: hidden;
+      margin-top: 8px;
+    }
+
+    .refresh-progress {
+      height: 100%;
+      width: 100%;
+      background: rgba(0,0,0,0.5);
+      border-radius: 2px;
+      transform-origin: left;
+      animation: shrink 180s linear infinite; /* 3 min */
+    }
+
+    @keyframes shrink {
+      from { transform: scaleX(1); }
+      to   { transform: scaleX(0); }
+    }
+  </style>
+</head>
+<body>
+
+  <div class="label">B2C Orders Count Live</div>
+
+  <div class="counter-wrap">
+    <div class="counter" id="counter">---</div>
+    <div class="pulse-ring"></div>
+  </div>
+
+  <div class="meta">
+    <div class="last-update" id="last-update">Connecting...</div>
+    <div class="refresh-bar">
+      <div class="refresh-progress" id="progress-bar"></div>
+    </div>
+  </div>
+
+  <script>
+    const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbx5srAWp28mP8d6LvCoo_3osOedKVjAOddeWq-ML7x0V4NvRAdOwOhGUrwqplGn4Njd/exec';
+    const REFRESH_MS = 3 * 60 * 1000; // 3 minutes
+
+    let displayedCount = 0;
+    let animationFrame = null;
+
+    function animateCount(from, to, duration = 1500) {
+      if (animationFrame) cancelAnimationFrame(animationFrame);
+      const start = performance.now();
+      const el = document.getElementById('counter');
+
+      function easeOut(t) { return 1 - Math.pow(1 - t, 3); }
+
+      function step(now) {
+        const elapsed = now - start;
+        const progress = Math.min(elapsed / duration, 1);
+        const current = Math.round(from + (to - from) * easeOut(progress));
+        el.textContent = current.toLocaleString('en-IN');
+        if (progress < 1) {
+          animationFrame = requestAnimationFrame(step);
+        } else {
+          el.classList.add('bump');
+          setTimeout(() => el.classList.remove('bump'), 150);
+        }
+      }
+      animationFrame = requestAnimationFrame(step);
+    }
+
+    function restartProgressBar() {
+      const bar = document.getElementById('progress-bar');
+      bar.style.animation = 'none';
+      bar.offsetHeight; // force reflow
+      bar.style.animation = '';
+    }
+
+    async function fetchCount() {
+      try {
+        const res = await fetch(`${APPS_SCRIPT_URL}?action=getCount`, {
+          redirect: 'follow',
+          cache: 'no-store'
+        });
+        const data = await res.json();
+
+        if (data.count !== undefined && data.count !== null) {
+          const newCount = parseInt(data.count) || 0;
+          animateCount(displayedCount, newCount);
+          displayedCount = newCount;
+
+          const ts = data.timestamp ? new Date(data.timestamp) : new Date();
+          const timeStr = ts.toLocaleTimeString('en-IN', {
+            timeZone: 'Asia/Kolkata',
+            hour: '2-digit', minute: '2-digit', second: '2-digit'
+          });
+          document.getElementById('last-update').textContent =
+            `LAST UPDATED: ${timeStr} IST  ·  REFRESHES IN 3 MIN`;
+        }
+      } catch (err) {
+        document.getElementById('last-update').textContent = 'CONNECTION ERROR — RETRYING...';
+        console.error(err);
+      }
+
+      restartProgressBar();
+    }
+
+    // Initial fetch + repeat every 3 min
+    fetchCount();
+    setInterval(fetchCount, REFRESH_MS);
+  </script>
+</body>
+</html>
