@@ -14,7 +14,7 @@ const CONFIG = {
     formPass:  process.env.PARCELX_FORM_PASS,
   },
   appsScript: {
-    url: 'https://script.google.com/macros/s/AKfycbx5srAWp28mP8d6LvCoo_3osOedKVjAOddeWq-ML7x0V4NvRAdOwOhGUrwqplGn4Njd/exec',
+    url: process.env.APPS_SCRIPT_URL,   // ← set in GitHub Secrets / .env
   },
 };
 
@@ -127,7 +127,7 @@ async function downloadMIS(page, context) {
   return savePath;
 }
 
-// ─── STEP 3: POST TO APPS SCRIPT (fixed redirect + chunking) ──────────────────
+// ─── STEP 3: POST TO APPS SCRIPT (redirect-safe + chunking) ──────────────────
 function postChunkToAppsScript(url, data) {
   return new Promise((resolve, reject) => {
     const body = JSON.stringify(data);
@@ -146,7 +146,6 @@ function postChunkToAppsScript(url, data) {
       };
 
       const req = https.request(options, (res) => {
-        // On redirect: follow as GET (script already ran on POST)
         if ([301, 302, 303].includes(res.statusCode) && res.headers.location) {
           log(`  ↪ Redirect → fetching response...`);
           res.resume();
@@ -201,16 +200,20 @@ async function uploadToGoogleSheets(csvFilePath) {
     }
     log(`  Chunk ${chunkIndex + 1} uploaded ✅`);
 
-    // Small pause between chunks to avoid rate limits
     if (i + CHUNK_SIZE < records.length) await sleep(1500);
   }
 
-  log(`✅ All ${records.length} rows uploaded to "Daily Dump"!`);
+  log(`✅ All ${records.length} rows uploaded to "Daily Dump" sheet!`);
 }
 
 // ─── MAIN ─────────────────────────────────────────────────────────────────────
 async function main() {
   log('=== ParcelX MIS Automation Started ===');
+
+  if (!CONFIG.appsScript.url) {
+    log('❌ ERROR: APPS_SCRIPT_URL is not set. Add it to GitHub Secrets.');
+    process.exit(1);
+  }
 
   const browser = await chromium.launch({
     headless: true,
