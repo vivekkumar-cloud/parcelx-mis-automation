@@ -107,13 +107,13 @@ async function downloadMIS(page, context) {
     const loader = document.querySelector('#searchbtn_loader');
     return !loader || loader.style.display === 'none';
   }, { timeout: 120000 });
-  await sleep(5000);
+  await sleep(8000); // Extra buffer for 5-day data to fully render
   log('Results loaded ✅');
 
   log('Clicking Export...');
   const [download] = await Promise.all([
-    context.waitForEvent('download', { timeout: 300000 }),
-    page.click('#btn_exportexcel'),
+    context.waitForEvent('download', { timeout: 600000 }), // 10 min for large file
+    page.click('#btn_exportexcel'),                        // ← page.click (not evaluate)
   ]);
 
   log('Waiting for file to generate...');
@@ -121,7 +121,7 @@ async function downloadMIS(page, context) {
     await page.waitForFunction(() => {
       const expLoader = document.querySelector('#btn_exportexcel_loader');
       return !expLoader || expLoader.style.display === 'none';
-    }, { timeout: 120000 });
+    }, { timeout: 600000 });
   } catch(e) { /* ignore */ }
 
   const savePath = path.join(DOWNLOAD_DIR, download.suggestedFilename() || `mis_${Date.now()}.csv`);
