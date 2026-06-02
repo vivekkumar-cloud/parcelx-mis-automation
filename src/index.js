@@ -24,11 +24,17 @@ if (!fs.existsSync(DOWNLOAD_DIR)) fs.mkdirSync(DOWNLOAD_DIR, { recursive: true }
 function log(msg) { console.log(`[${new Date().toISOString()}] ${msg}`); }
 async function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
+// Today in dd-mm-yyyy format (ParcelX format)
 function getToday() {
   const d = new Date();
-  const dd = String(d.getDate()).padStart(2, '0');
-  const mm = String(d.getMonth() + 1).padStart(2, '0');
-  return `${dd}-${mm}-${d.getFullYear()}`;
+  return `${String(d.getDate()).padStart(2,'0')}-${String(d.getMonth()+1).padStart(2,'0')}-${d.getFullYear()}`;
+}
+
+// N days back in dd-mm-yyyy format
+function getFromDate(daysBack) {
+  const d = new Date();
+  d.setDate(d.getDate() - daysBack);
+  return `${String(d.getDate()).padStart(2,'0')}-${String(d.getMonth()+1).padStart(2,'0')}-${d.getFullYear()}`;
 }
 
 // ─── STEP 1: LOGIN ────────────────────────────────────────────────────────────
@@ -53,7 +59,7 @@ async function loginParcelX(page) {
   log('Login successful ✅');
 }
 
-// ─── STEP 2: DOWNLOAD MIS ─────────────────────────────────────────────────────
+// ─── STEP 2: DOWNLOAD MIS (5 days back to today) ──────────────────────────────
 async function downloadMIS(page, context) {
   log('Navigating to MIS Report page...');
   await page.goto('https://panel.parcelx.in/mis_report', {
@@ -75,14 +81,17 @@ async function downloadMIS(page, context) {
   if (ndrBox && !(await ndrBox.isChecked())) await ndrBox.click();
   await sleep(500);
 
-  const today = getToday();
-  log(`Setting date: ${today}`);
-  await page.evaluate((date) => {
-    const from = document.querySelector('#from_date');
-    const to   = document.querySelector('#to_date');
-    if (from) { from.value = date; from.dispatchEvent(new Event('change')); }
-    if (to)   { to.value   = date; to.dispatchEvent(new Event('change')); }
-  }, today);
+  // ← KEY CHANGE: From = 5 days back, To = today
+  const fromDate = getFromDate(5);
+  const today    = getToday();
+  log(`Setting date range: ${fromDate} → ${today}`);
+
+  await page.evaluate((from, to) => {
+    const fromEl = document.querySelector('#from_date');
+    const toEl   = document.querySelector('#to_date');
+    if (fromEl) { fromEl.value = from; fromEl.dispatchEvent(new Event('change')); }
+    if (toEl)   { toEl.value   = to;   toEl.dispatchEvent(new Event('change')); }
+  }, fromDate, today);
   await sleep(500);
 
   log('Clicking Search...');
@@ -127,7 +136,7 @@ async function downloadMIS(page, context) {
   return savePath;
 }
 
-// ─── STEP 3: POST TO APPS SCRIPT (fixed redirect + chunking) ──────────────────
+// ─── STEP 3: POST TO APPS SCRIPT (with redirect handling) ─────────────────────
 function postChunkToAppsScript(url, data) {
   return new Promise((resolve, reject) => {
     const body = JSON.stringify(data);
@@ -146,14 +155,12 @@ function postChunkToAppsScript(url, data) {
       };
 
       const req = https.request(options, (res) => {
-        // On redirect: follow as GET (script already ran on POST)
         if ([301, 302, 303].includes(res.statusCode) && res.headers.location) {
           log(`  ↪ Redirect → fetching response...`);
           res.resume();
           makeRequest(res.headers.location, true);
           return;
         }
-
         let responseData = '';
         res.on('data', chunk => responseData += chunk);
         res.on('end', () => {
@@ -171,7 +178,7 @@ function postChunkToAppsScript(url, data) {
   });
 }
 
-// ─── STEP 3: UPLOAD IN CHUNKS OF 1000 ROWS ────────────────────────────────────
+// ─── STEP 3: UPLOAD IN CHUNKS ─────────────────────────────────────────────────
 async function uploadToGoogleSheets(csvFilePath) {
   log('Parsing CSV...');
   const rawCsv = fs.readFileSync(csvFilePath, 'utf8');
@@ -181,13 +188,13 @@ async function uploadToGoogleSheets(csvFilePath) {
     bom: true,
   });
 
-  const CHUNK_SIZE = 1000;
+  const CHUNK_SIZE  = 1000;
   const totalChunks = Math.ceil(records.length / CHUNK_SIZE);
   log(`Uploading ${records.length} rows in ${totalChunks} chunks of ${CHUNK_SIZE}...`);
 
   for (let i = 0; i < records.length; i += CHUNK_SIZE) {
     const chunkIndex = Math.floor(i / CHUNK_SIZE);
-    const chunk = records.slice(i, i + CHUNK_SIZE);
+    const chunk      = records.slice(i, i + CHUNK_SIZE);
 
     log(`Sending chunk ${chunkIndex + 1}/${totalChunks} (${chunk.length} rows)...`);
     const result = await postChunkToAppsScript(CONFIG.appsScript.url, {
@@ -201,7 +208,6 @@ async function uploadToGoogleSheets(csvFilePath) {
     }
     log(`  Chunk ${chunkIndex + 1} uploaded ✅`);
 
-    // Small pause between chunks to avoid rate limits
     if (i + CHUNK_SIZE < records.length) await sleep(1500);
   }
 
