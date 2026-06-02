@@ -86,12 +86,12 @@ async function downloadMIS(page, context) {
   const today    = getToday();
   log(`Setting date range: ${fromDate} → ${today}`);
 
-  await page.evaluate((from, to) => {
+  await page.evaluate(({ from, to }) => {
     const fromEl = document.querySelector('#from_date');
     const toEl   = document.querySelector('#to_date');
     if (fromEl) { fromEl.value = from; fromEl.dispatchEvent(new Event('change')); }
     if (toEl)   { toEl.value   = to;   toEl.dispatchEvent(new Event('change')); }
-  }, fromDate, today);
+  }, { from: fromDate, to: today });
   await sleep(500);
 
   log('Clicking Search...');
