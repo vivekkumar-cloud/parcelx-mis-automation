@@ -118,7 +118,7 @@ async function downloadMIS(page, context) {
 
   log('Clicking Export...');
   const [download] = await Promise.all([
-    context.waitForEvent('download', { timeout: 120000 }),
+    context.waitForEvent('download', { timeout: 300000 }),
     page.click('#btn_exportexcel'),
   ]);
 
@@ -127,7 +127,7 @@ async function downloadMIS(page, context) {
     await page.waitForFunction(() => {
       const expLoader = document.querySelector('#btn_exportexcel_loader');
       return !expLoader || expLoader.style.display === 'none';
-    }, { timeout: 60000 });
+    }, { timeout: 120000 });
   } catch(e) { /* ignore */ }
 
   const savePath = path.join(DOWNLOAD_DIR, download.suggestedFilename() || `mis_${Date.now()}.csv`);
